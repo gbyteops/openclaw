@@ -168,9 +168,10 @@ export async function handleAgentExecutionError(params: {
       },
     );
     const text = resolveExternalRunFailureTextForConversation({
-      text: params.shouldSurfaceToControlUi
-        ? renderControlUiAgentFailureCopy(message)
-        : externalReply.text,
+      text:
+        params.shouldSurfaceToControlUi && err.userMessage === undefined
+          ? renderControlUiAgentFailureCopy(message)
+          : externalReply.text,
       visibleReplyDelivered: await turn.resolveVisibleReplyDelivery?.(),
       sessionCtx: turn.sessionCtx,
       isGenericRunnerFailure: externalReply.isGenericRunnerFailure,
