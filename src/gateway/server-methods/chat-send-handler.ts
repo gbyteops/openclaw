@@ -190,9 +190,9 @@ async function handleChatSendWithOptions(
             client,
             context,
             method: "chat.send",
-            requestParams: { agentId: selectedAgent.agentId, sessionKey },
+            requestParams: { agentId: preparedSession.value.agentId, sessionKey },
             expectedTarget: {
-              agentId: selectedAgent.agentId,
+              agentId: preparedSession.value.agentId,
               sessionKey,
               storePath,
               sessionId: admitted.value.sessionBinding.sessionId,

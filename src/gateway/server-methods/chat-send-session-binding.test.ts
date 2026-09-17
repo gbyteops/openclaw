@@ -57,7 +57,7 @@ it.each(admissionScenarios)(
     const closure = scenario === "dashboard-writer" ? "aborted" : dashboard ? "released" : scenario;
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const runId = "retained-preparation";
-      const sessionKey = "agent:main:binding";
+      const sessionKey = scenario === "dashboard" ? "agent:main:main" : "agent:main:binding";
       const scope = { agentId: "main", sessionKey };
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:unrelated" },
@@ -156,7 +156,8 @@ it.each(admissionScenarios)(
       try {
         const respond = vi.fn();
         const params = {
-          sessionKey,
+          // Exercise the ordinary dashboard alias without an explicit agentId.
+          sessionKey: scenario === "dashboard" ? "main" : sessionKey,
           message: "Keep this user turn in its session",
           idempotencyKey: runId,
         };
