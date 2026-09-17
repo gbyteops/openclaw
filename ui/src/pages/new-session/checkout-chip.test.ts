@@ -187,16 +187,12 @@ describe("Checkout chip state", () => {
         name.dispatchEvent(new Event("input"));
         expect(onBaseRefInput).toHaveBeenCalledWith(" release ");
         expect(onWorktreeNameInput).toHaveBeenCalledWith(" checkout-proof ");
-        const suggestions = container.querySelectorAll("wa-dropdown-item");
+        const suggestions = container.querySelectorAll("[data-worktree-suggestion]");
         expect([...suggestions].map((item) => item.textContent?.trim())).toEqual([
           "main",
           "release/next",
         ]);
-        suggestions[1]!
-          .closest("wa-dropdown")!
-          .dispatchEvent(
-            new CustomEvent("wa-select", { detail: { item: { value: "release/next" } } }),
-          );
+        (suggestions[1] as HTMLButtonElement).click();
         expect(onBaseRefInput).toHaveBeenLastCalledWith("release/next");
         name.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
         container.querySelector("wa-popover")!.dispatchEvent(new CustomEvent("wa-after-hide"));
@@ -216,7 +212,9 @@ describe("Checkout chip state", () => {
   it("shows the actual branch name and only confirms valid input", () => {
     const container = document.createElement("div");
     const onConfirm = vi.fn();
+    const onPopoverShow = vi.fn();
     const onPopoverHide = vi.fn();
+    const onPopoverAfterHide = vi.fn();
     const renderNamed = (worktreeName: string) =>
       render(
         renderCheckoutChip({
@@ -225,7 +223,11 @@ describe("Checkout chip state", () => {
           folderLabel: "OpenClaw",
           worktree: true,
           worktreeAvailable: true,
-          branches: { repoRoot: "/repo", branches: [], headBranch: "main" },
+          branches: {
+            repoRoot: "/repo",
+            branches: [{ name: "main", kind: "local" }],
+            headBranch: "main",
+          },
           branchesLoading: false,
           baseRef: "main",
           worktreeName,
@@ -234,9 +236,9 @@ describe("Checkout chip state", () => {
           popoverOpen: true,
           popoverHiding: false,
           onGuardTransition: vi.fn(),
-          onPopoverShow: vi.fn(),
+          onPopoverShow,
           onPopoverHide,
-          onPopoverAfterHide: vi.fn(),
+          onPopoverAfterHide,
           onSelectWorktree: vi.fn(),
           onBaseRefInput: vi.fn(),
           onWorktreeNameInput: vi.fn(),
@@ -249,9 +251,20 @@ describe("Checkout chip state", () => {
     expect(container.textContent).toContain(
       "Creates branch openclaw/picker-fixes in a separate checkout.",
     );
+    const suggestionPopup = container.querySelector("wa-popup")!;
+    for (const type of ["wa-show", "wa-hide", "wa-after-hide"]) {
+      suggestionPopup.dispatchEvent(new CustomEvent(type, { bubbles: true, composed: true }));
+    }
+    expect(onPopoverShow).not.toHaveBeenCalled();
+    expect(onPopoverHide).not.toHaveBeenCalled();
+    expect(onPopoverAfterHide).not.toHaveBeenCalled();
     container
       .querySelectorAll("input")[1]!
       .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    suggestionPopup.dispatchEvent(
+      new CustomEvent("wa-after-hide", { bubbles: true, composed: true }),
+    );
+    expect(onConfirm).not.toHaveBeenCalled();
     container.querySelector("wa-popover")!.dispatchEvent(new CustomEvent("wa-after-hide"));
     expect(onConfirm).toHaveBeenCalledOnce();
 

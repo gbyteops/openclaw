@@ -143,9 +143,26 @@ suite.define(() => {
 
       const baseRef = checkout.getByRole("textbox", { name: "From", exact: true });
       await baseRef.focus();
-      await checkout.locator('wa-dropdown-item[value="release/next"]').click();
+      await checkout.locator('[data-worktree-suggestion="release/next"]').click();
       await expect.poll(() => baseRef.inputValue()).toBe("release/next");
+      await baseRef.fill("");
+      await baseRef.pressSequentially("release/next");
+      await expect
+        .poll(() => baseRef.evaluate((input) => document.activeElement === input))
+        .toBe(true);
+      await captureUiProof(suite, page, "worktree-picker-input-focus.png");
+      await baseRef.press("Home");
+      await baseRef.press("End");
+      await baseRef.press("ArrowLeft");
+      expect(await baseRef.evaluate((input) => (input as HTMLInputElement).selectionStart)).toBe(
+        "release/next".length - 1,
+      );
       const name = checkout.getByLabel("Name", { exact: true });
+      await baseRef.press("Tab");
+      await expect
+        .poll(() => name.evaluate((input) => document.activeElement === input))
+        .toBe(true);
+      await expect.poll(() => checkout.getAttribute("open")).not.toBeNull();
       await name.fill("picker-inputs");
       await checkout
         .getByText("Creates branch openclaw/picker-inputs in a separate checkout.", {
@@ -207,9 +224,7 @@ suite.define(() => {
         await baseRef.fill("origin/release-outside-suggestions");
         expect(
           await page
-            .locator("wa-dropdown-item", {
-              hasText: "origin/release-outside-suggestions",
-            })
+            .locator('[data-worktree-suggestion="origin/release-outside-suggestions"]')
             .count(),
         ).toBe(0);
         await captureUiProof(

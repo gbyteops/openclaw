@@ -19,6 +19,9 @@ function handleFieldPointer(event: PointerEvent) {
 }
 
 function handlePopoverHide(event: Event, onHide: () => void) {
+  if (event.target !== event.currentTarget) {
+    return;
+  }
   const active = document.activeElement;
   if (
     active instanceof HTMLInputElement &&
@@ -30,6 +33,15 @@ function handlePopoverHide(event: Event, onHide: () => void) {
     return;
   }
   onHide();
+}
+
+function setBranchSuggestionsOpen(target: EventTarget | null, open: boolean) {
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  const field = target.closest(".new-session-page__branch-field");
+  field?.querySelector("wa-popup")?.toggleAttribute("active", open);
+  field?.querySelector("input")?.setAttribute("aria-expanded", String(open));
 }
 
 export function resolveCheckoutChip(params: {
@@ -97,17 +109,24 @@ function renderWorktreeFields(params: {
     event.preventDefault();
     const popover = target.closest("wa-popover");
     if (popover) {
-      popover.addEventListener("wa-after-hide", params.onConfirm, { once: true });
+      const confirmAfterOuterHide = (hideEvent: Event) => {
+        if (hideEvent.target !== popover) {
+          return;
+        }
+        popover.removeEventListener("wa-after-hide", confirmAfterOuterHide);
+        params.onConfirm();
+      };
+      popover.addEventListener("wa-after-hide", confirmAfterOuterHide);
       popover.removeAttribute("open");
     }
   };
   const suggestions = (params.branches?.branches ?? []).slice(0, 8);
   const branchName = params.worktreeName.trim();
   const baseRefInput = html`<input
-    slot=${suggestions.length ? "trigger" : nothing}
-    style="width: 100%"
+    id="new-session-worktree-base-ref"
     type="text"
     aria-label=${t("newSession.worktreeBaseRef")}
+    aria-expanded="false"
     ?disabled=${params.submitting || params.pendingPlacement}
     placeholder=${
       params.branchesLoading
@@ -115,13 +134,10 @@ function renderWorktreeFields(params: {
         : (params.branches?.defaultBranch ?? t("newSession.worktreeBaseRef"))
     }
     .value=${params.baseRef}
-    @focus=${(event: FocusEvent) => {
-      if (event.currentTarget instanceof HTMLElement) {
-        event.currentTarget.closest("wa-dropdown")?.setAttribute("open", "");
-      }
-    }}
+    @focus=${(event: FocusEvent) => setBranchSuggestionsOpen(event.currentTarget, true)}
     @input=${(event: Event) => {
       if (event.currentTarget instanceof HTMLInputElement) {
+        setBranchSuggestionsOpen(event.currentTarget, true);
         params.onBaseRefInput(event.currentTarget.value);
       }
     }}
@@ -135,22 +151,44 @@ function renderWorktreeFields(params: {
       <span>${t("newSession.worktreeBaseRef")}</span>
       ${
         suggestions.length
-          ? html`<wa-dropdown
-              style="flex: 1 1 auto; min-width: 0"
-              placement="bottom-start"
-              @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-                const value = event.detail.item.value;
-                if (value) {
-                  params.onBaseRefInput(value);
+          ? html`<div
+              class="new-session-page__branch-field"
+              @focusout=${(event: FocusEvent) => {
+                const field = event.currentTarget;
+                if (
+                  field instanceof HTMLElement &&
+                  (!(event.relatedTarget instanceof Node) || !field.contains(event.relatedTarget))
+                ) {
+                  setBranchSuggestionsOpen(field, false);
                 }
               }}
             >
               ${baseRefInput}
-              ${suggestions.map(
-                (branch) =>
-                  html`<wa-dropdown-item value=${branch.name}>${branch.name}</wa-dropdown-item>`,
-              )}
-            </wa-dropdown>`
+              <wa-popup
+                class="new-session-page__branch-popup"
+                anchor="new-session-worktree-base-ref"
+                placement="bottom-start"
+                sync="width"
+              >
+                <div class="new-session-page__branch-suggestions">
+                  ${suggestions.map(
+                    (branch) => html`<button
+                      type="button"
+                      class="session-menu__item"
+                      data-worktree-suggestion=${branch.name}
+                      tabindex="-1"
+                      @mousedown=${(event: MouseEvent) => event.preventDefault()}
+                      @click=${(event: MouseEvent) => {
+                        params.onBaseRefInput(branch.name);
+                        setBranchSuggestionsOpen(event.currentTarget, false);
+                      }}
+                    >
+                      <span class="session-menu__text">${branch.name}</span>
+                    </button>`,
+                  )}
+                </div>
+              </wa-popup>
+            </div>`
           : baseRefInput
       }
     </div>
@@ -254,9 +292,17 @@ export function renderCheckoutChip(params: {
       for="new-session-checkout-trigger"
       placement="bottom-start"
       without-arrow
-      @wa-show=${params.onPopoverShow}
+      @wa-show=${(event: Event) => {
+        if (event.target === event.currentTarget) {
+          params.onPopoverShow();
+        }
+      }}
       @wa-hide=${(event: Event) => handlePopoverHide(event, params.onPopoverHide)}
-      @wa-after-hide=${params.onPopoverAfterHide}
+      @wa-after-hide=${(event: Event) => {
+        if (event.target === event.currentTarget) {
+          params.onPopoverAfterHide();
+        }
+      }}
     >
       <div class="new-session-page__picker-root">
         <div class="new-session-page__menu-title">${t("newSession.checkout")}</div>
