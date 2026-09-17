@@ -9,6 +9,7 @@ import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-action-discovery.js";
+import { isScheduledMessageWriteAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-targets.js";
@@ -17,7 +18,6 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as messageActionTurnCapability from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
-import { createAbortError } from "../../infra/abort-signal.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import {
   resolveMessageBroadcastAccountPlan,
@@ -42,7 +42,6 @@ import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
 import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
-import { readGatewayCallOptions } from "./gateway.js";
 import {
   createMessageToolDecisionRecorder,
   resolveTrustedDecisionChannel,
@@ -305,11 +304,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     prepareBeforeToolCallParams: explicitTargetGuard?.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: explicitTargetGuard?.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal) => {
-      if (signal?.aborted) {
-        throw createAbortError("Message send aborted");
-      }
-      const assertCallerCurrent = captureGatewayToolCallerAssertion();
-      assertCallerCurrent?.();
+      const assertCaller = turnAuthority.captureCaller(signal, captureGatewayToolCallerAssertion);
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
       const params = { ...(args as Record<string, unknown>) };
       const action = readToolStringParam(params, "action", {
@@ -342,17 +337,18 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           ? decisions.executionIdentityToken
           : undefined;
       const deliveryRunId = options?.runId ?? executionIdentityToken?.runId;
+      const scheduledWrite = isScheduledMessageWriteAction(action)
+        ? messageActionAuthorization.scheduled
+        : undefined;
       if (normalizeOptionalString(options?.messageActionTurnCapability) && !trustedTurnContext) {
         decisions.recordTurnCapabilityInactive();
         throw new Error("message action turn capability is no longer active");
       }
       const assertActionCurrent = () => {
-        assertCallerCurrent?.();
-        if (signal?.aborted) {
-          throw createAbortError("Message action aborted");
-        }
+        assertCaller();
         turnAuthority.assertCurrent();
         scheduledRead?.assertCurrent();
+        scheduledWrite?.assertCurrent();
         assertDashboardReadCurrent?.();
       };
       assertActionCurrent();
@@ -404,9 +400,11 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         decisions.runBoundary(() => explicitTargetGuard.require(params, action));
       }
 
-      const gatewayOpts = readGatewayCallOptions(params);
       const gatewayContext = { ...options, messageActionTurnCapability: gatewayTurnCapability };
-      const gateway = createMessageToolGateway(gatewayOpts, gatewayContext, signal, () => cfg);
+      const gateway = createMessageToolGateway(params, gatewayContext, signal, {
+        resolveConfig: () => cfg,
+        preserveWriteOutcome: Boolean(scheduledWrite),
+      });
       decisions.runBoundary(() =>
         validateExplicitMessageAccountSelection({
           cfg: rawConfig,
@@ -693,7 +691,11 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           const currentSourceReply =
             result.handledBy !== "internal-source" &&
             (await isDeliveredCurrentSourceReplyAsync(sourceReply));
-          assertActionCurrent();
+          // A completed provider write must settle even if its caller was revoked
+          // while awaiting the accepted response. Its next request stays fenced.
+          if (!scheduledWrite) {
+            assertActionCurrent();
+          }
           const messageDelivery = projectEmbeddedMessageDeliveryFact(result, currentSourceReply);
           groupThread.record(result, sourceReply, currentSourceReply, requestedSourceReplyFinal);
           if (

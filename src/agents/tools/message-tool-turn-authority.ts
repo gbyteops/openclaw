@@ -4,6 +4,7 @@ import {
   resolveMessageActionTurnAuthorization,
   resolveMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 
 /** Keep discovery and execution bound to the same private turn identity. */
 export function createMessageToolTurnAuthority(params: {
@@ -20,6 +21,19 @@ export function createMessageToolTurnAuthority(params: {
     agentId && sessionKey ? { token, agentId, runId, sessionKey, sessionId } : undefined;
   const resolve = () => lookup && resolveMessageActionTurnAuthorization(lookup);
   return {
+    captureCaller: (signal: AbortSignal | undefined, capture: () => (() => void) | undefined) => {
+      if (signal?.aborted) {
+        throw createAbortError("Message send aborted");
+      }
+      const assertCurrent = capture();
+      assertCurrent?.();
+      return () => {
+        assertCurrent?.();
+        if (signal?.aborted) {
+          throw createAbortError("Message action aborted");
+        }
+      };
+    },
     beginInvocation: (action: string) => {
       const authorization = resolve();
       const isRead = isFencedProviderReadAction(action);

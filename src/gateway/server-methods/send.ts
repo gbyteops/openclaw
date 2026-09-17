@@ -903,14 +903,15 @@ export const sendHandlers: GatewayRequestHandlers = {
       client,
       requestedOrigin: request.conversationReadOrigin,
     });
-    const { assertReadCurrent, agentRuntimeAuthority } = createMessageActionRuntimeAuthority({
-      client,
-      context,
-      respond,
-      sessionMutationCommitGuard,
-      action: request.action,
-      authorization: trustedContext.messageActionAuthorization,
-    });
+    const { assertReadCurrent, assertScheduledWriteCurrent, agentRuntimeAuthority } =
+      createMessageActionRuntimeAuthority({
+        client,
+        context,
+        respond,
+        sessionMutationCommitGuard,
+        action: request.action,
+        authorization: trustedContext.messageActionAuthorization,
+      });
     const assertDirectAdapterHandoff = agentRuntimeAuthority.commitGuard;
     const onPlatformSendDispatch = assertDirectAdapterHandoff
       ? async () => assertDirectAdapterHandoff()
@@ -1142,7 +1143,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                   : {}),
               };
               let payload: unknown;
-              if (canonicalAction) {
+              if (canonicalAction || assertScheduledWriteCurrent) {
                 const { runMessageAction } =
                   await import("../../infra/outbound/message-action-runner.js");
                 const result = await runMessageAction({

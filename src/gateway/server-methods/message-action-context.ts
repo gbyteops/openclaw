@@ -1,6 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { isFencedProviderReadAction } from "../../channels/plugins/message-action-dispatch.js";
+import {
+  isFencedProviderReadAction,
+  isScheduledMessageWriteAction,
+} from "../../channels/plugins/message-action-dispatch.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -17,7 +20,7 @@ import {
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-/** Retain the caller and admitted read source before routing or replay. */
+/** Retain the live caller and admitted source through this action's requests. */
 export function createMessageActionRuntimeAuthority(
   params: Pick<
     Parameters<GatewayRequestHandlers["message.action"]>[0],
@@ -31,16 +34,21 @@ export function createMessageActionRuntimeAuthority(
     ? (params.authorization?.scheduled?.assertCurrent ??
       params.authorization?.assertDashboardReadCurrent)
     : undefined;
+  const assertScheduledWriteCurrent = isScheduledMessageWriteAction(params.action)
+    ? params.authorization?.scheduled?.assertCurrent
+    : undefined;
+  const assertActionCurrent = assertReadCurrent ?? assertScheduledWriteCurrent;
   return {
     assertReadCurrent,
+    assertScheduledWriteCurrent,
     agentRuntimeAuthority: createAgentRuntimeAuthorityGuard(
       params.client,
       params.context,
       params.respond,
-      assertReadCurrent
+      assertActionCurrent
         ? () => {
             params.sessionMutationCommitGuard?.();
-            assertReadCurrent();
+            assertActionCurrent();
           }
         : params.sessionMutationCommitGuard,
     ),
