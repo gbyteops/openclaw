@@ -401,10 +401,12 @@ function assertClawHubExternalInstallContract(installPath) {
   }
 
   const dependencyPackagePath = path.join(installPath, "node_modules", "is-number", "package.json");
-  if (!fs.existsSync(dependencyPackagePath)) {
+  // The generated fixture owns this sentinel; published packages may not declare it.
+  if (fs.existsSync(dependencyPackagePath)) {
+    assertRealPathInside(installPath, dependencyPackagePath, "kitchen-sink isolated dependency");
+  } else if (process.env.OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB !== "1") {
     throw new Error(`missing kitchen-sink isolated dependency: ${dependencyPackagePath}`);
   }
-  assertRealPathInside(installPath, dependencyPackagePath, "kitchen-sink isolated dependency");
 }
 
 function inferInstallSource(spec) {

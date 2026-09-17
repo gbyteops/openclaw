@@ -168,11 +168,13 @@ function runAssertClawhubInstalled({
   contextEngineIds = [],
   dependencyPlacement = "local",
   installPathRelative,
+  liveClawhub,
   recordOverrides = {},
 }: {
   contextEngineIds?: string[];
   dependencyPlacement?: "local" | "missing" | "outside" | "sibling-prefix";
   installPathRelative?: string;
+  liveClawhub?: string;
   recordOverrides?: Record<string, unknown>;
 } = {}) {
   const label = `clawhub-context-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -251,6 +253,7 @@ function runAssertClawhubInstalled({
           HOME: home,
           OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
           OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
+          OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB: liveClawhub,
           KITCHEN_SINK_ID: pluginId,
           KITCHEN_SINK_LABEL: label,
           KITCHEN_SINK_SOURCE: "clawhub",
@@ -702,34 +705,66 @@ describe("kitchen-sink plugin assertions", () => {
     }
   });
 
-  it.each(["local", "missing", "outside", "sibling-prefix"] as const)(
-    "retains the %s installed dependency boundary for captured kitchen-sink loads",
-    (dependencyPlacement) => {
-      const result = runAssertClawhubInstalled({
-        contextEngineIds: ["openclaw-kitchen-sink-fixture"],
-        dependencyPlacement,
-        recordOverrides: {
-          artifactKind: "npm-pack",
-          artifactFormat: "tgz",
-          clawpackSha256: "digest",
-          clawpackSize: 1,
-          npmIntegrity: "sha512-test",
-          npmShasum: "digest",
-          npmTarballName: "fixture.tgz",
-        },
-      });
-      if (dependencyPlacement === "local") {
-        expect(result.status, result.stderr).toBe(0);
-      } else {
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain(
-          dependencyPlacement === "missing"
-            ? "missing kitchen-sink isolated dependency"
-            : "kitchen-sink isolated dependency resolved outside",
-        );
-      }
-    },
-  );
+  describe.each([
+    ["default hermetic", undefined],
+    ["explicit hermetic", "0"],
+    ["live", "1"],
+    ["non-live flag", "true"],
+  ])("%s ClawHub npm-pack", (_mode, liveClawhub) => {
+    it.each(["local", "missing", "outside", "sibling-prefix"] as const)(
+      "retains the %s installed dependency boundary",
+      (dependencyPlacement) => {
+        const result = runAssertClawhubInstalled({
+          contextEngineIds: ["openclaw-kitchen-sink-fixture"],
+          dependencyPlacement,
+          liveClawhub,
+          recordOverrides: {
+            artifactKind: "npm-pack",
+            artifactFormat: "tgz",
+            clawpackSha256: "digest",
+            clawpackSize: 1,
+            npmIntegrity: "sha512-test",
+            npmShasum: "digest",
+            npmTarballName: "fixture.tgz",
+          },
+        });
+        if (
+          dependencyPlacement === "local" ||
+          (liveClawhub === "1" && dependencyPlacement === "missing")
+        ) {
+          expect(result.status, result.stderr).toBe(0);
+        } else {
+          expect(result.status).toBe(1);
+          expect(result.stderr).toContain(
+            dependencyPlacement === "missing"
+              ? "missing kitchen-sink isolated dependency"
+              : "kitchen-sink isolated dependency resolved outside",
+          );
+        }
+      },
+    );
+  });
+
+  it("rejects live ClawHub install paths outside managed extensions without a sentinel", () => {
+    const result = runAssertClawhubInstalled({
+      contextEngineIds: ["openclaw-kitchen-sink-fixture"],
+      dependencyPlacement: "missing",
+      liveClawhub: "1",
+      installPathRelative: [".openclaw", "extensions", "..", "escaped-kitchen-sink"].join(path.sep),
+      recordOverrides: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        clawpackSha256: "digest",
+        clawpackSize: 1,
+        npmIntegrity: "sha512-test",
+        npmShasum: "digest",
+        npmTarballName: "fixture.tgz",
+      },
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("kitchen-sink ClawHub install path resolved outside");
+  });
 
   it("rejects ClawHub kitchen-sink install paths that resolve outside managed extensions", () => {
     const result = runAssertClawhubInstalled({
