@@ -27,7 +27,10 @@ import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/works
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
-import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import {
+  resolveSessionMutationAuthorization,
+  SessionMutationAuthorizationChangedError,
+} from "../session-sharing.js";
 import { loadSessionEntry } from "../session-utils.js";
 import {
   prepareGatewaySkillAuthoring,
@@ -57,7 +60,7 @@ import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.j
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayRequestHandlerOptions, SessionMutationAuthorization } from "./types.js";
 
 type ChatSendInternalOptions = {
   goalResume?: SessionGoalOperation & { action: "resume" };
@@ -166,6 +169,7 @@ async function handleChatSendWithOptions(
     turnKind: normalizedRequest.value.turnKind,
   };
   const cronCreatorAuthority = externalAuthorityAdmission?.resolve(externalAdmissionParams);
+  let dashboardSessionAuthorization: SessionMutationAuthorization | undefined;
   const assertDashboardReadCurrent = externalAuthorityAdmission?.allowsDashboardReads(
     externalAdmissionParams,
   )
@@ -180,6 +184,29 @@ async function handleChatSendWithOptions(
         ) {
           throw new Error("Dashboard message read admission is no longer active.");
         }
+        if (!dashboardSessionAuthorization) {
+          // The original preparation may create its SID. Capture it once, never a successor.
+          const resolved = resolveSessionMutationAuthorization({
+            client,
+            context,
+            method: "chat.send",
+            requestParams: { agentId: selectedAgent.agentId, sessionKey },
+            expectedTarget: {
+              agentId: selectedAgent.agentId,
+              sessionKey,
+              storePath,
+              sessionId: admitted.value.sessionBinding.sessionId,
+            },
+          });
+          if (resolved.error) {
+            throw new SessionMutationAuthorizationChangedError(resolved.error);
+          }
+          if (!resolved.authorization) {
+            throw new Error("Dashboard session authorization is unavailable.");
+          }
+          dashboardSessionAuthorization = resolved.authorization;
+        }
+        dashboardSessionAuthorization.assertCurrent();
       }
     : undefined;
 

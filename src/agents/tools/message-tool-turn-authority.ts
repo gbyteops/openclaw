@@ -20,6 +20,8 @@ export function createMessageToolTurnAuthority(params: {
   const lookup =
     agentId && sessionKey ? { token, agentId, runId, sessionKey, sessionId } : undefined;
   const resolve = () => lookup && resolveMessageActionTurnAuthorization(lookup);
+  const policy = resolve()?.scheduled?.policy;
+  const origin = policy?.mode === "account" ? policy.ownerOrigin : undefined;
   return {
     captureCaller: (signal: AbortSignal | undefined, capture: () => (() => void) | undefined) => {
       if (signal?.aborted) {
@@ -51,6 +53,13 @@ export function createMessageToolTurnAuthority(params: {
         assertDashboardReadCurrent: isRead ? dashboardRead : undefined,
       };
     },
+    scheduledAccountScope:
+      policy?.mode === "account" && origin && origin.kind !== "unknown"
+        ? {
+            accountId: policy.ownerAccountId,
+            ...(origin.kind === "external" ? { channel: origin.channel } : {}),
+          }
+        : undefined,
     assertCurrent: () => {
       if (token?.trim() && (!lookup || !resolveMessageActionTurnCapability(lookup))) {
         throw new Error("message action turn capability is no longer active");

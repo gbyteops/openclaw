@@ -1,5 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  type MessageActionParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   isFencedProviderReadAction,
   isScheduledMessageWriteAction,
@@ -20,27 +24,32 @@ import {
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-/** Retain the live caller and admitted source through this action's requests. */
+/** Retain the live caller and scheduled source through this action's requests. */
 export function createMessageActionRuntimeAuthority(
   params: Pick<
     Parameters<GatewayRequestHandlers["message.action"]>[0],
     "client" | "context" | "respond" | "sessionMutationCommitGuard"
   > & {
-    action: string;
+    request: Pick<MessageActionParams, "action" | "accountId" | "params">;
     authorization?: MessageActionAuthorization;
   },
 ) {
-  const assertReadCurrent = isFencedProviderReadAction(params.action)
+  const assertReadCurrent = isFencedProviderReadAction(params.request.action)
     ? (params.authorization?.scheduled?.assertCurrent ??
       params.authorization?.assertDashboardReadCurrent)
     : undefined;
-  const assertScheduledWriteCurrent = isScheduledMessageWriteAction(params.action)
+  const assertScheduledWriteCurrent = isScheduledMessageWriteAction(params.request.action)
     ? params.authorization?.scheduled?.assertCurrent
     : undefined;
   const assertActionCurrent = assertReadCurrent ?? assertScheduledWriteCurrent;
+  const scheduledPolicy = assertReadCurrent ? params.authorization?.scheduled?.policy : undefined;
   return {
     assertReadCurrent,
     assertScheduledWriteCurrent,
+    routeAccountId:
+      normalizeOptionalString(params.request.accountId) ??
+      normalizeOptionalString(params.request.params.accountId) ??
+      (scheduledPolicy?.mode === "account" ? scheduledPolicy.ownerAccountId : undefined),
     agentRuntimeAuthority: createAgentRuntimeAuthorityGuard(
       params.client,
       params.context,

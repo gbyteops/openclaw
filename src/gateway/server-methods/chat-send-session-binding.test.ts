@@ -13,6 +13,10 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../../config/sessions/session-sharing-store.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -38,6 +42,7 @@ const admissionScenarios = [
   "dashboard",
   "dashboard-writer",
   "dashboard-credential-revoked",
+  "dashboard-member-revoked",
   "dashboard-unattested",
   "dashboard-internal",
 ] as const;
@@ -48,6 +53,7 @@ it.each(admissionScenarios)(
     const dashboard = scenario.startsWith("dashboard");
     const directDashboard = dashboard && scenario !== "dashboard-internal";
     const dashboardReadAllowed = directDashboard && scenario !== "dashboard-unattested";
+    const membershipRequired = scenario === "dashboard-member-revoked";
     const closure = scenario === "dashboard-writer" ? "aborted" : dashboard ? "released" : scenario;
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const runId = "retained-preparation";
@@ -67,6 +73,20 @@ it.each(admissionScenarios)(
             entry.sessionId === "unrelated-session",
         ).length;
       const profile = ensureProfileForEmail("authoring-binding@example.test");
+      const owner = membershipRequired
+        ? ensureProfileForEmail("authoring-owner@example.test")
+        : profile;
+      const initialSessionId = membershipRequired ? "member-session" : runId;
+      const createdActor = { type: "human", source: "profile", id: owner.id } as const;
+      if (membershipRequired) {
+        await upsertSessionEntryCore(scope, {
+          sessionId: initialSessionId,
+          updatedAt: Date.now(),
+          visibility: "suggest",
+          createdActor,
+        });
+        addSessionMember(scope, { identityId: profile.id, addedBy: owner.id });
+      }
       const connection = new AbortController();
       const hasCurrentClientAuthority = vi.fn(() => true);
       const client: GatewayClient = {
@@ -76,7 +96,9 @@ it.each(admissionScenarios)(
           ? {
               internal: {
                 authenticatedControlUi: true as const,
-                ...(scenario !== "dashboard-writer" ? { controlUiAdmin: true as const } : {}),
+                ...(scenario !== "dashboard-writer" && !membershipRequired
+                  ? { controlUiAdmin: true as const }
+                  : {}),
               },
             }
           : {}),
@@ -91,7 +113,7 @@ it.each(admissionScenarios)(
           maxProtocol: 1,
           role: "operator",
           scopes:
-            scenario === "dashboard-writer"
+            scenario === "dashboard-writer" || membershipRequired
               ? ["operator.write"]
               : dashboard
                 ? ["operator.admin"]
@@ -187,11 +209,13 @@ it.each(admissionScenarios)(
           withGatewayToolCallerIdentity(caller, () => capability.invoke({ action: "list" }));
         const { admission, userTurn } = owned;
         const original = admission.activeRunAbort.entry;
-        expect(original?.sessionId).toBe(runId);
+        expect(original?.sessionId).toBe(initialSessionId);
         // This focused test controls preparation; the native WS test proves its real producer.
         await upsertSessionEntryCore(scope, {
-          sessionId: "committed-session",
+          sessionId: membershipRequired ? initialSessionId : "committed-session",
           updatedAt: Date.now(),
+          createdActor,
+          ...(membershipRequired ? { visibility: "suggest" as const } : {}),
         });
         const committed = loadExactSessionEntryReadOnly(scope);
         if (!committed) {
@@ -206,7 +230,7 @@ it.each(admissionScenarios)(
         prepared(binding);
         prepared({ ...binding, sessionKey: "agent:main:unrelated", sessionId: "foreign" });
         if (dashboardRead) {
-          expect(admission.admittedSessionId).toBe(runId);
+          expect(admission.admittedSessionId).toBe(initialSessionId);
           expect(dashboardRead.sessionId).toBe(binding.sessionId);
           dashboardRead.assertCurrent();
         }
@@ -223,6 +247,11 @@ it.each(admissionScenarios)(
             expect(dashboardRead.assertCurrent).toThrow(
               "Dashboard message read admission is no longer active.",
             );
+          } else if (membershipRequired) {
+            removeSessionMember(scope, profile.id, undefined, binding.sessionId);
+            expect(admission.activeRunAbort.controller.signal.aborted).toBe(false);
+            expect(hasCurrentClientAuthority()).toBe(true);
+            expect(dashboardRead.assertCurrent).toThrow("session is suggest for this connection");
           }
         }
 
